@@ -1,2 +1,2 @@
-# Quatpred-app-
+# Quatpred-app
 Protein quaternary structure prediction 
