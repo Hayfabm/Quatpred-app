@@ -1,58 +1,33 @@
 import datetime
 import os
 import random
+
+import neptune.new as neptune
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import (
-    Input,
-    LSTM,
-    Dense,
-    Dropout,
-    Flatten,
-    Convolution1D,
-    MaxPooling1D,
-)
-from tensorflow.keras.callbacks import (
-    ModelCheckpoint,
-)
-import neptune.new as neptune
-from neptune.new.integrations.tensorflow_keras import NeptuneCallback
-from utils import create_dataset
-from biotransformers import BioTransformers
-from protlearn.features import aaindex1, paac
-from sklearn.preprocessing import LabelEncoder
 from keras.utils import np_utils
-from sklearn.model_selection import train_test_split
+from neptune.new.integrations.tensorflow_keras import NeptuneCallback
+from protlearn.features import aaindex1, paac
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.callbacks import (EarlyStopping, ModelCheckpoint,
+                                        ReduceLROnPlateau)
+from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras.models import Model
+
 from features_extraction import CT_processing, DPC_processing
+from utils import create_dataset
+
 # Model architecture
-# first input model
-input_1 = Input(shape=(2087, 1))  # embedding_layer(None, 1344, 1)
-conv11 = Convolution1D(
-    64,
-    kernel_size=16,
-    activation="relu",
-    kernel_initializer="random_uniform",
-    name="convolution_1d_layer1",
-)(input_1)
-pool11 = MaxPooling1D(pool_size=4)(conv11)
-conv12 = Convolution1D(
-    32,
-    kernel_size=16,
-    activation="relu",
-    kernel_initializer="random_uniform",
-    name="convolution_1d_layer2",
-)(pool11)
-pool12 = MaxPooling1D(pool_size=4)(conv12)
-lstm11 = LSTM(32, return_sequences=False, name="lstm1")(pool12)
-drop12 = Dropout(0.1)(lstm11)
-flat1 = Flatten()(pool12)
-hidden1 = Dense(10, activation="relu")(flat1)
-drop1 = Dropout(0.1)(hidden1)
-output = Dense(17, activation="sigmoid")(drop1)
-model = Model(inputs=input_1, outputs=output)
-# summarize layersa
+
+input_1 = Input(shape=(1319)) 
+dense11 = Dense(100, activation="relu")(input_1)
+dense12 = (Dense(50, activation='relu'))(dense11)
+drop2 = Dropout(0.1)(dense12)
+output = Dense(17, activation="softmax")(drop2)
+model = Model(inputs=[input_1], outputs=output)
+# summarize layers
 print(model.summary())
 
 
@@ -61,7 +36,7 @@ if __name__ == "__main__":
     # init neptune logger
     run = neptune.init(
          project="sophiedalentour/QuaPred", 
-         tags=["bio-transformers", "DPC", "PseAAC", "aaindex", "CT" "muti_class_ classification"],
+         tags=["DPC", "PseAAC", "CT", "aaind", "muti_class_ classification"],
         )
 
     # set the seed
@@ -70,15 +45,11 @@ if __name__ == "__main__":
     random.seed(SEED)
     np.random.seed(SEED)
     tf.random.set_seed(SEED)
-
-    # embedding and convolution parameters
-    BIOTF_MODEL = "esm1_t6_43M_UR50S"
-    BIOTF_POOLMODE = "cls"
-    BIOTF_BS = 2
-
+    
+    
     # training parameters
-    BATCH_SIZE = 64
-    NUM_EPOCHS = 1000
+    BATCH_SIZE = 128
+    NUM_EPOCHS = 20
     SAVED_MODEL_PATH = (
         "logs/model_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".hdf5"
     )
@@ -99,66 +70,47 @@ if __name__ == "__main__":
      # compile model
     model.compile(
         loss="binary_crossentropy",
-        optimizer="adagrad",
+        optimizer="adam",
         metrics=["accuracy", "AUC", "Precision", "Recall"],
     )
 
     # create  dataset
     sequences, labels = create_dataset(data_path=DATA)
-
     
-    # sequences embeddings with biotransformers (input_1)
-    bio_trans = BioTransformers(backend=BIOTF_MODEL)
-
-    sequences_embeddings = []
-
-    for i in range(0, len(sequences), BIOTF_BS):
-        batched_sequence = sequences[i:i + BIOTF_BS]
-        batched_embedding = bio_trans.compute_embeddings(
-            batched_sequence, pool_mode=(BIOTF_POOLMODE,), batch_size=BIOTF_BS
-        )[
-        BIOTF_POOLMODE
-        ]  # (BIOTF_BS, 768)
-        sequences_embeddings.append(batched_embedding)
-
-    sequences_embeddings = tf.concat(sequences_embeddings, axis=0) # (10237, 768)
-    sequences_embeddings= sequences_embeddings.numpy() #from tensor to numpy
-
-
-    # DPC (input_2)
+    # DPC 
     dip = DPC_processing(sequences)
     dipeptide= np.array(dip)
-    print(dipeptide.shape) #(10237, 400)
+    print(dipeptide.shape) #(, 400)
 	
-    # CT (input_3)
-    CT = CT_processing(sequences)
-    conjoint_triad= np.array(CT)
-    print(conjoint_triad.shape) #(10237, 343)
-
-
-    # PseAAC (input_4)
+    
+    # PseAAC 
     seqs = sequences
     paac_comp, desc = paac(seqs, lambda_=3, remove_zero_cols=True)
-    print(paac_comp.shape) #(10237, 23)
+    print(paac_comp.shape) #(, 23)
     
-    # AAindex (input_5)
+    # CT 
+    CT = CT_processing(sequences)
+    conjoint_triad= np.array(CT)
+    print(conjoint_triad.shape) #(, 343)
+
+
+    # AAindex 
     seqs = sequences
     aaind, inds = aaindex1(seqs, standardize='zscore')
-    print(aaind.shape) #(10237, 553)
-
+    print(aaind.shape) #(, 553)
     
     # Dimension concatenation
     concat= np.concatenate(
         (
-        sequences_embeddings,
-        conjoint_triad,
+        
         dipeptide,
         paac_comp,
+        conjoint_triad,
         aaind
         ), axis= 1
     )
-    print(concat)
-    print(concat.shape) #(10237, 2087)
+    print(concat.shape) #(, 423)
+    
 
     # encode class values as integers
     encoder = LabelEncoder()
@@ -166,47 +118,48 @@ if __name__ == "__main__":
     encoded_labels = encoder.transform(labels)
     # convert integers to dummy variables (i.e. one hot encoded)
     one_hot_encoded = np_utils.to_categorical(encoded_labels)
-    print(one_hot_encoded) #(10238, 17)
+    print(one_hot_encoded) #(,17)
 
+    
+    
+    k_fold = 10
+    scores = []
 
-    # split data 
-    X_train, X_test, y_train, y_test = train_test_split(
-            concat,
-            one_hot_encoded, 
-            test_size=0.2,
+    skf = StratifiedKFold(n_splits=k_fold, shuffle=True, random_state=1024)
+    for ((train, test), k) in zip(skf.split(concat, encoded_labels), range(k_fold)):
+        X_train = concat[train]
+        print(X_train.shape)
+        X_test = concat[test]
+        print(X_test.shape)
+        y_tr = encoded_labels[train]
+        y_train= np_utils.to_categorical(y_tr)
+        y_te = encoded_labels[test]
+        y_test= np_utils.to_categorical(y_te)
+        print(y_test)
+        
+        # define callbacks
+        my_callbacks = [
+            # ReduceLROnPlateau(monitor="val_loss", factor=0.1, patience=3, verbose=1),
+            # EarlyStopping(monitor="val_loss", min_delta=0, patience=5, verbose=1),
+            ModelCheckpoint(
+                monitor="val_accuracy",
+                mode="max",
+                filepath=SAVED_MODEL_PATH,
+                save_best_only=True,
+            ),
+            NeptuneCallback(run=run, base_namespace="metrics"),
+        ]
+
+        # fit the model
+        history = model.fit(
+            X_train, y_train,
+            batch_size=BATCH_SIZE,
+            epochs=NUM_EPOCHS,
+            verbose=1,
+            validation_data= (X_test, y_test)
+            ,
+            callbacks=my_callbacks,
         )
-    print(X_train.shape)
-    print(X_test.shape)
-    #sequences reshape
-    x_train = X_train.reshape(
-        X_train.shape[0], 2087, 1
-    )  
-    x_test = X_test.reshape(
-        X_test.shape[0], 2087, 1
-    ) 
-
-
-    # define callbacks
-    my_callbacks = [
-        # ReduceLROnPlateau(monitor="val_loss", factor=0.1, patience=3, verbose=1),
-        # EarlyStopping(monitor="val_loss", min_delta=0, patience=5, verbose=1),
-        ModelCheckpoint(
-            monitor="val_accuracy",
-            mode="max",
-            filepath=SAVED_MODEL_PATH,
-            save_best_only=True,
-        ),
-        NeptuneCallback(run=run, base_namespace="metrics"),
-    ]
-
-    # fit the model
-    history = model.fit(
-        X_train, y_train,
-        batch_size=BATCH_SIZE,
-        epochs=NUM_EPOCHS,
-        verbose=1,
-        validation_data= (X_test, y_test)
-        ,
-        callbacks=my_callbacks,
-    )
     run.stop()
+
+
