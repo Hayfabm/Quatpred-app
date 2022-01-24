@@ -15,9 +15,10 @@ from tensorflow.keras.callbacks import (EarlyStopping, ModelCheckpoint,
                                         ReduceLROnPlateau)
 from tensorflow.keras.layers import Dense, Dropout, Input
 from tensorflow.keras.models import Model
+from sklearn.metrics import roc_auc_score, average_precision_score
 
 from features_extraction import CT_processing, DPC_processing
-from utils import create_dataset
+from utils import create_dataset, categorical_probas_to_classes, calculate_performace
 
 # Model architecture
 
@@ -32,6 +33,26 @@ print(model.summary())
 
 
 if __name__ == "__main__":
+
+    path = "Quatpred/"
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+    Quat = open(path + "Quatpred_performance.txt" , "w")
+
+    Quat.writelines(
+        "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+        + "\n"
+    )
+    Quat.write(
+        "            sensitivity,     specificity,    precision,     acc,       mcc,       "
+        + "\n"
+    )
+    Quat.writelines(
+        "----------------------------------------------------------------------------------------------------------------------------------------------------------------------------"
+        + "\n"
+    )
+
 
     # init neptune logger
     run = neptune.init(
@@ -49,7 +70,7 @@ if __name__ == "__main__":
     
     # training parameters
     BATCH_SIZE = 128
-    NUM_EPOCHS = 20
+    NUM_EPOCHS = 10
     SAVED_MODEL_PATH = (
         "logs/model_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".hdf5"
     )
@@ -160,6 +181,102 @@ if __name__ == "__main__":
             ,
             callbacks=my_callbacks,
         )
-    run.stop()
+    #run.stop()
+     # prediction probability
+        predictions = model.predict(X_test)
+        y_class = categorical_probas_to_classes(predictions)
 
+        # true_y_C_C=utils.categorical_probas_to_classes(true_y_C)
+        true_y = categorical_probas_to_classes(y_test)
+        (   
+            sensitivity, 
+            specificity,
+            precision,
+            acc,
+            mcc,
+        ) = calculate_performace(len(y_class), y_class, true_y)
+        print("======================")
+        print("======================")
+        print(
+            "Iter " + ", " + str(k + 1) + " of " + str(k_fold) + "cv:"
+        )
+        print(
+            "\tsn='%0.4f', sp='%0.4f', precision='%0.4f',  acc='%0.4f', mcc='%0.4f'"
+            % (sensitivity, specificity, precision, acc, mcc)
+        )
+        
+        Quat.write(
+            
+            str(sensitivity) 
+            + ","
+            + str(specificity)
+            + ","
+            + str(precision)
+            + ","
+            + str(acc)
+            + ","
+            + str(mcc)
+            + "\n"
+        )
+        scores.append(
+            [sensitivity, specificity, precision,  acc, mcc]
+        )
+    scores = np.array(scores)
+
+    print(len(scores))
+    
+    print(
+        "sensitivity=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[0] * 100, np.std(scores, axis=0)[0] * 100)
+    )
+    print(
+        "specificity=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[1] * 100, np.std(scores, axis=0)[1] * 100)
+    )
+    print(
+        "precision=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[2] * 100, np.std(scores, axis=0)[2] * 100)
+    )
+
+    print(
+        "acc=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[3] * 100, np.std(scores, axis=0)[3] * 100)
+    )
+    print(
+        "mcc=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[4] * 100, np.std(scores, axis=0)[4] * 100)
+    )
+    
+
+
+    Quat.write(
+        "sensitivity=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[0] * 100, np.std(scores, axis=0)[0] * 100)
+        + "\n"
+    )
+    Quat.write(
+        "specificity=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[1] * 100, np.std(scores, axis=0)[1] * 100)
+        + "\n"
+    )
+    Quat.write(
+        "precision=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[2] * 100, np.std(scores, axis=0)[2] * 100)
+        + "\n"
+    )
+    Quat.write(
+        "acc=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[3] * 100, np.std(scores, axis=0)[3] * 100)
+        + "\n"
+    )
+    Quat.write(
+        "mcc=%.2f%% (+/- %.2f%%)"
+        % (np.mean(scores, axis=0)[4] * 100, np.std(scores, axis=0)[4] * 100)
+        + "\n"
+    )
+
+    Quat.close()
+    
+
+    run.stop()
 
